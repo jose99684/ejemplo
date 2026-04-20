@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Circuitos Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            cursor: crosshair;
+            background-image: 
+                radial-gradient(#334155 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .component-card {
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .component-card:hover {
+            transform: translateY(-2px);
+            background-color: #334155;
+        }
+        .active-tool {
+            border: 2px solid #38bdf8;
+            background-color: #1e293b;
+        }
+    </style>
+</head>
+<body class="flex h-screen w-screen overflow-hidden">
+
+    <!-- Barra Lateral de Herramientas -->
+    <div class="w-64 bg-slate-900 border-r border-slate-700 flex flex-col p-4 gap-4 z-10 shadow-xl">
+        <h1 class="text-xl font-bold text-sky-400 mb-2">Simulador DC</h1>
+        
+        <div class="space-y-4">
+            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Componentes</p>
+            
+            <div onclick="setTool('battery')" id="tool-battery" class="component-card p-3 rounded-lg bg-slate-800 flex items-center gap-3">
+                <div class="w-10 h-10 bg-red-500 rounded flex items-center justify-center font-bold">V</div>
+                <div>
+                    <div class="text-sm font-medium">Batería</div>
+                    <div class="text-xs text-slate-400">Fuente 9V</div>
+                </div>
+            </div>
+
+            <div onclick="setTool('bulb')" id="tool-bulb" class="component-card p-3 rounded-lg bg-slate-800 flex items-center gap-3">
+                <div class="w-10 h-10 bg-yellow-500 rounded flex items-center justify-center font-bold">L</div>
+                <div>
+                    <div class="text-sm font-medium">Bombilla</div>
+                    <div class="text-xs text-slate-400">Carga</div>
+                </div>
+            </div>
+
+            <div onclick="setTool('switch')" id="tool-switch" class="component-card p-3 rounded-lg bg-slate-800 flex items-center gap-3">
+                <div class="w-10 h-10 bg-green-600 rounded flex items-center justify-center font-bold">S</div>
+                <div>
+                    <div class="text-sm font-medium">Interruptor</div>
+                    <div class="text-xs text-slate-400">Control</div>
+                </div>
+            </div>
+
+            <div onclick="setTool('wire')" id="tool-wire" class="component-card p-3 rounded-lg bg-slate-800 flex items-center gap-3 active-tool">
+                <div class="w-10 h-10 bg-slate-500 rounded flex items-center justify-center font-bold">W</div>
+                <div>
+                    <div class="text-sm font-medium">Cable</div>
+                    <div class="text-xs text-slate-400">Conexión</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-auto pt-4 border-t border-slate-700 space-y-2">
+            <button onclick="clearCanvas()" class="w-full py-2 bg-rose-600 hover:bg-rose-700 rounded-md text-sm font-bold transition">Limpiar Todo</button>
+            <div class="text-[10px] text-slate-500 text-center uppercase">Haz clic para colocar. Arrastra para conectar bornes.</div>
+        </div>
+    </div>
+
+    <!-- Área Principal del Simulador -->
+    <div class="flex-1 relative flex flex-col">
+        <!-- Header de Información -->
+        <div class="h-14 bg-slate-900/50 backdrop-blur-md border-b border-slate-700 flex items-center px-6 justify-between">
+            <div id="status-text" class="text-sky-400 font-mono text-sm">Estado: Circuito Abierto</div>
+            <div class="flex gap-4 text-xs">
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-red-500 rounded-full"></span> Positivo</span>
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-blue-500 rounded-full"></span> Negativo</span>
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <canvas id="circuitCanvas" class="flex-1"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('circuitCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status-text');
+
+        let width, height;
+        let components = [];
+        let wires = [];
+        let currentTool = 'wire';
+        let isDragging = false;
+        let dragStartNode = null;
+        let tempLine = null;
+        let selectedComponent = null;
+
+        const GRID_SIZE = 20;
+        const NODE_RADIUS = 6;
+
+        function resize() {
+            width = canvas.clientWidth;
+            height = canvas.clientHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        function setTool(tool) {
+            currentTool = tool;
+            document.querySelectorAll('.component-card').forEach(el => el.classList.remove('active-tool'));
+            document.getElementById(`tool-${tool}`).classList.add('active-tool');
+        }
+
+        function clearCanvas() {
+            components = [];
+            wires = [];
+            updateCircuitLogic();
+        }
+
+        class Component {
+            constructor(type, x, y) {
+                this.type = type;
+                this.x = Math.round(x / GRID_SIZE) * GRID_SIZE;
+                this.y = Math.round(y / GRID_SIZE) * GRID_SIZE;
+                this.w = 60;
+                this.h = 40;
+                this.state = false; // For switches or bulbs
+                this.nodes = [];
+                
+                if (type === 'battery') {
+                    this.nodes = [
+                        { id: 'pos', x: this.x - 30, y: this.y, color: '#ef4444' },
+                        { id: 'neg', x: this.x + 30, y: this.y, color: '#3b82f6' }
+                    ];
+                } else {
+                    this.nodes = [
+                        { id: 'n1', x: this.x - 30, y: this.y, color: '#94a3b8' },
+                        { id: 'n2', x: this.x + 30, y: this.y, color: '#94a3b8' }
+                    ];
+                }
+            }
+
+            draw() {
+                ctx.lineWidth = 2;
+                
+                // Draw component body
+                ctx.fillStyle = '#1e293b';
+                ctx.strokeStyle = '#64748b';
+                ctx.beginPath();
+                ctx.roundRect(this.x - 25, this.y - 15, 50, 30, 5);
+                ctx.fill();
+                ctx.stroke();
+
+                // Type specific graphics
+                if (this.type === 'battery') {
+                    ctx.fillStyle = '#ef4444';
+                    ctx.font = 'bold 12px monospace';
+                    ctx.fillText('9V', this.x - 8, this.y + 5);
+                } else if (this.type === 'bulb') {
+                    ctx.fillStyle = this.state ? '#fde047' : '#475569';
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 10, 0, Math.PI * 2);
+                    ctx.fill();
+                    if(this.state) {
+                        ctx.shadowBlur = 15;
+                        ctx.shadowColor = '#fde047';
+                        ctx.stroke();
+                        ctx.shadowBlur = 0;
+                    }
+                } else if (this.type === 'switch') {
+                    ctx.strokeStyle = '#10b981';
+                    ctx.beginPath();
+                    if (this.state) {
+                        ctx.moveTo(this.x - 15, this.y);
+                        ctx.lineTo(this.x + 15, this.y);
+                    } else {
+                        ctx.moveTo(this.x - 15, this.y);
+                        ctx.lineTo(this.x + 10, this.y - 15);
+                    }
+                    ctx.stroke();
+                }
+
+                // Draw nodes
+                this.nodes.forEach(node => {
+                    ctx.fillStyle = node.color;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            isPointInside(px, py) {
+                return px > this.x - 25 && px < this.x + 25 && py > this.y - 15 && py < this.y + 15;
+            }
+
+            getNodeAt(px, py) {
+                return this.nodes.find(n => Math.hypot(n.x - px, n.y - py) < 15);
+            }
+        }
+
+        function drawWire(x1, y1, x2, y2, active = false) {
+            ctx.beginPath();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = active ? '#38bdf8' : '#475569';
+            if (active) {
+                ctx.setLineDash([5, 5]);
+                ctx.lineDashOffset = -(Date.now() / 20) % 10;
+            } else {
+                ctx.setLineDash([]);
+            }
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function updateCircuitLogic() {
+            // Reset states
+            components.forEach(c => { if(c.type === 'bulb') c.state = false; });
+            
+            // Find path from battery positive to negative
+            const battery = components.find(c => c.type === 'battery');
+            if (!battery) {
+                statusText.innerText = "Estado: No hay fuente de energía";
+                return;
+            }
+
+            let closedPath = false;
+            let visited = new Set();
+            
+            function checkConnection(currentNode, targetNode) {
+                if (currentNode === targetNode) return true;
+                if (visited.has(currentNode)) return false;
+                visited.add(currentNode);
+
+                // Find wires from this node
+                const connectedWires = wires.filter(w => w.n1 === currentNode || w.n2 === currentNode);
+                
+                for (let wire of connectedWires) {
+                    const nextNode = (wire.n1 === currentNode) ? wire.n2 : wire.n1;
+                    
+                    // From node to its sibling in component
+                    const parentComp = components.find(c => c.nodes.includes(nextNode));
+                    if (!parentComp) continue;
+
+                    // If it's a switch, it must be closed
+                    if (parentComp.type === 'switch' && !parentComp.state) continue;
+
+                    const siblingNode = parentComp.nodes.find(n => n !== nextNode);
+                    if (checkConnection(siblingNode, targetNode)) {
+                        if (parentComp.type === 'bulb') parentComp.state = true;
+                        wire.active = true;
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            wires.forEach(w => w.active = false);
+            closedPath = checkConnection(battery.nodes[0], battery.nodes[1]);
+            
+            if (closedPath) {
+                statusText.innerText = "Estado: Circuito Cerrado (Fluyendo)";
+                statusText.className = "text-green-400 font-mono text-sm";
+            } else {
+                statusText.innerText = "Estado: Circuito Abierto";
+                statusText.className = "text-sky-400 font-mono text-sm";
+            }
+        }
+
+        canvas.addEventListener('mousedown', e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Check if clicking a node to start a wire
+            for (let comp of components) {
+                const node = comp.getNodeAt(x, y);
+                if (node) {
+                    isDragging = true;
+                    dragStartNode = node;
+                    return;
+                }
+
+                // Check if clicking a switch to toggle it
+                if (comp.isPointInside(x, y)) {
+                    if (comp.type === 'switch') {
+                        comp.state = !comp.state;
+                        updateCircuitLogic();
+                    }
+                    return;
+                }
+            }
+
+            // Otherwise place component or start wire from empty space
+            if (currentTool !== 'wire') {
+                components.push(new Component(currentTool, x, y));
+                updateCircuitLogic();
+            }
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (isDragging && dragStartNode) {
+                tempLine = { x1: dragStartNode.x, y1: dragStartNode.y, x2: x, y2: y };
+            }
+        });
+
+        canvas.addEventListener('mouseup', e => {
+            if (isDragging && dragStartNode) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                for (let comp of components) {
+                    const endNode = comp.getNodeAt(x, y);
+                    if (endNode && endNode !== dragStartNode) {
+                        wires.push({ n1: dragStartNode, n2: endNode, active: false });
+                        break;
+                    }
+                }
+            }
+            isDragging = false;
+            dragStartNode = null;
+            tempLine = null;
+            updateCircuitLogic();
+        });
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            // Draw Wires
+            wires.forEach(w => {
+                drawWire(w.n1.x, w.n1.y, w.n2.x, w.n2.y, w.active);
+            });
+
+            // Draw Temp Wire
+            if (tempLine) {
+                drawWire(tempLine.x1, tempLine.y1, tempLine.x2, tempLine.y2, false);
+            }
+
+            // Draw Components
+            components.forEach(c => c.draw());
+
+            requestAnimationFrame(animate);
+        }
+
+        window.onload = animate;
+    </script>
+</body>
+</html>
